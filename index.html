@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connexion Lien + PIN</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px; }
+        .card { max-width: 500px; margin: 30px auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .logo { width: 60px; height: 60px; background: #ff6b00; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center; color: white; font-size: 28px; font-weight: bold; }
+        h2 { text-align: center; margin-bottom: 25px; color: #333; }
+        input { width: 100%; padding: 14px; margin: 8px 0; border: 1px solid #ddd; border-radius: 8px; font-size: 16px; }
+        input:focus { outline: none; border-color: #ff6b00; }
+        button { width: 100%; padding: 14px; background: #ff6b00; color: white; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; margin-top: 10px; font-weight: 600; }
+        button:hover { background: #e55f00; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .result { background: #f0f0f0; padding: 15px; border-radius: 8px; margin-top: 20px; }
+        .result p { margin: 12px 0; word-break: break-all; font-size: 14px; }
+        .copy { background: #666; padding: 5px 10px; border-radius: 4px; color: white; font-size: 12px; cursor: pointer; float: right; }
+        .copy:hover { background: #444; }
+        .hidden { display: none; }
+        label { font-weight: 600; font-size: 14px; color: #333; display: block; margin-top: 5px; }
+        #message { margin-top: 15px; text-align: center; padding: 10px; border-radius: 6px; font-size: 14px; }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <!-- PAGE 1: INSCRIPTION -->
+    <div id="page-signup" class="card">
+        <div class="logo">V</div>
+        <h2>Crée ton compte</h2>
+        <label>Nom et prénom</label>
+        <input type="text" id="nomComplet" placeholder="Ex: AD MARUSZCZYK" required>
+        <label>Adresse Gmail</label>
+        <input type="email" id="email" placeholder="exemple@gmail.com" required>
+        <button onclick="inscription()">S'inscrire</button>
+    </div>
+
+    <!-- PAGE 2: AFFICHE LIEN + GMAIL + PIN -->
+    <div id="page-lien" class="card hidden">
+        <div class="logo">V</div>
+        <h2>✅ Compte créé !</h2>
+        <p style="text-align:center; color:#666; margin-bottom:20px;">Envoie ces infos sur ton autre téléphone</p>
+        <div class="result" id="infos"></div>
+        <button onclick="afficherPage('page-login')">J'ai le lien → Me connecter</button>
+    </div>
+
+    <!-- PAGE 3: CONNEXION GMAIL + PIN -->
+    <div id="page-login" class="card hidden">
+        <div class="logo">V</div>
+        <h2 id="bienvenue">Ta zone client</h2>
+        <p style="text-align: center; color: #666; margin-bottom:20px;">Connecte-toi avec ton email et code PIN</p>
+        <label>Ton adresse e-mail</label>
+        <input type="email" id="login-email" placeholder="@gmail.com" required>
+        <label>Ton code PIN</label>
+        <input type="text" id="login-pin" placeholder="6 chiffres" maxlength="6" required>
+        <button onclick="connexion()">Se connecter →</button>
+        <div id="message"></div>
+    </div>
+
+    <!-- PAGE 4: DASHBOARD - CONNECTÉ -->
+    <div id="page-dashboard" class="card hidden">
+        <div class="logo">V</div>
+        <h2 id="titre-dashboard">Bienvenue !</h2>
+        <p id="email-dashboard" style="text-align:center; margin:20px 0;"></p>
+        <p style="text-align:center; color:green; font-weight:bold;">✅ Tu es connecté immédiatement !</p>
+        <button onclick="logout()" style="background:#666; margin-top:30px;">Se déconnecter</button>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getFirestore, doc, setDoc, getDoc } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyCFqUfsZhs51dHhQSZn8TDw_fnpsmKc42I",
+            authDomain: "siteinscrit-d4b2f.firebaseapp.com",
+            projectId: "siteinscrit-d4b2f",
+            storageBucket: "siteinscrit-d4b2f.firebasestorage.app",
+            messagingSenderId: "521362154947",
+            appId: "1:521362154947:web:54b1e5f6f63b0357368976"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        let currentToken = null;
+        let currentUserData = null;
+
+        function afficherPage(pageId) {
+            document.querySelectorAll('.card').forEach(p => p.classList.add('hidden'));
+            document.getElementById(pageId).classList.remove('hidden');
+        }
+        window.afficherPage = afficherPage;
+
+        window.inscription = async function() {
+            const nom = document.getElementById('nomComplet').value.trim();
+            const email = document.getElementById('email').value.trim();
+            
+            if (!nom || !email) return alert('Remplis tous les champs');
+
+            const pin = Math.floor(100000 + Math.random() * 900000).toString();
+            const token = crypto.randomUUID();
+            currentToken = token;
+            
+            try {
+                await setDoc(doc(db, "loginTokens", token), {
+                    nom: nom,
+                    email: email,
+                    pin: pin,
+                    expires: Date.now() + 86400000,
+                    used: false
+                });
+
+                const lien = `${window.location.origin}${window.location.pathname}?cl=${token}`;
+                
+                document.getElementById('infos').innerHTML = `
+                    <p><strong>Lien de connexion :</strong> <span class="copy" onclick="navigator.clipboard.writeText('${lien}')">Copier</span><br>
+                    <a href="${lien}" target="_blank">${lien}</a></p>
+                    
+                    <p><strong>Adresse e-mail :</strong> <span class="copy" onclick="navigator.clipboard.writeText('${email}')">Copier</span><br>
+                    ${email}</p>
+                    
+                    <p><strong>Code PIN :</strong> <span class="copy" onclick="navigator.clipboard.writeText('${pin}')">Copier</span><br>
+                    ${pin}</p>
+                    
+                    <p style="color:#ff6b00; font-size:13px; margin-top:15px;">⚠️ Envoie ces 3 infos sur ton autre téléphone pour te connecter</p>
+                `;
+                afficherPage('page-lien');
+            } catch (error) {
+                alert('Erreur Firestore : ' + error.message);
+            }
+        }
+
+        window.connexion = async function() {
+            const email = document.getElementById('login-email').value.trim();
+            const pin = document.getElementById('login-pin').value.trim();
+            const messageDiv = document.getElementById('message');
+            
+            if (!currentToken) {
+                messageDiv.className = 'error';
+                messageDiv.textContent = 'Lien invalide. Recommence l\'inscription.';
+                return;
+            }
+
+            try {
+                const docSnap = await getDoc(doc(db, "loginTokens", currentToken));
+                
+                if (!docSnap.exists()) {
+                    messageDiv.className = 'error';
+                    messageDiv.textContent = 'Lien expiré ou déjà utilisé';
+                    return;
+                }
+
+                const data = docSnap.data();
+
+                if (data.used) {
+                    messageDiv.className = 'error';
+                    messageDiv.textContent = 'Ce lien a déjà été utilisé';
+                    return;
+                }
+                if (data.email !== email || data.pin !== pin) {
+                    messageDiv.className = 'error';
+                    messageDiv.textContent = 'Email ou PIN incorrect';
+                    return;
+                }
+                if (Date.now() > data.expires) {
+                    messageDiv.className = 'error';
+                    messageDiv.textContent = 'Code PIN expiré (24h)';
+                    return;
+                }
+
+                await setDoc(doc(db, "loginTokens", currentToken), { ...data, used: true });
+                localStorage.setItem('user', JSON.stringify({ nom: data.nom, email: data.email }));
+                
+                document.getElementById('titre-dashboard').textContent = `Bienvenue ${data.nom} !`;
+                document.getElementById('email-dashboard').textContent = `Email : ${data.email}`;
+                afficherPage('page-dashboard');
+            } catch (error) {
+                messageDiv.className = 'error';
+                messageDiv.textContent = 'Erreur : ' + error.message;
+            }
+        }
+
+        window.logout = function() {
+            localStorage.removeItem('user');
+            location.href = window.location.pathname;
+        }
+
+        window.onload = async function() {
+            const token = new URLSearchParams(window.location.search).get('cl');
+            
+            const user = localStorage.getItem('user');
+            if (user) {
+                const userData = JSON.parse(user);
+                document.getElementById('titre-dashboard').textContent = `Bienvenue ${userData.nom} !`;
+                document.getElementById('email-dashboard').textContent = `Email : ${userData.email}`;
+                afficherPage('page-dashboard');
+                return;
+            }
+
+            if (token) {
+                currentToken = token;
+                try {
+                    const docSnap = await getDoc(doc(db, "loginTokens", token));
+                    if (docSnap.exists() && !docSnap.data().used) {
+                        currentUserData = docSnap.data();
+                        document.getElementById('bienvenue').textContent = `${currentUserData.nom}, connecte-toi`;
+                        afficherPage('page-login');
+                    } else {
+                        alert('Lien invalide ou déjà utilisé');
+                    }
+                } catch (error) {
+                    alert('Erreur : ' + error.message);
+                }
+            }
+        }
+    </script>
+</body>
+</html>

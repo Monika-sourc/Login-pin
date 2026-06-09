@@ -1,206 +1,310 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="pl">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gestion Accès</title>
-    <style>
-        * { margin:0; padding:0; box-sizing:border-box; }
-        body { font-family: Arial, sans-serif; background:#f5f5f5; padding:20px; }
-        .card { max-width:600px; margin:30px auto; background:white; padding:30px; border-radius:12px; box-shadow:0 2px 10px rgba(0,0,0,0.1); }
-        .logo { width:60px; height:60px; background:#ff6b00; border-radius:50%; margin:0 auto 20px; display:flex; align-items:center; justify-content:center; color:white; font-size:28px; font-weight:bold; }
-        h2 { text-align:center; margin-bottom:25px; }
-        input { width:100%; padding:14px; margin:8px 0; border:1px solid #ddd; border-radius:8px; font-size:16px; }
-        button { width:100%; padding:14px; background:#ff6b00; color:white; border:none; border-radius:8px; font-size:16px; cursor:pointer; margin-top:10px; font-weight:600; }
-        button:hover { background:#e55f00; }
-        .result { background:#f0f0f0; padding:15px; border-radius:8px; margin-top:20px; }
-        .copy { background:#666; padding:5px 10px; border-radius:4px; color:white; font-size:12px; cursor:pointer; float:right; }
-        .hidden { display:none; }
-        label { font-weight:600; font-size:14px; display:block; margin-top:5px; }
-        #message { margin-top:15px; text-align:center; padding:10px; border-radius:6px; }
-        .error { background:#f8d7da; color:#721c24; }
-        .success { background:#d4edda; color:#155724; }
-        table { width:100%; border-collapse:collapse; margin-top:20px; }
-        th, td { padding:10px; border:1px solid #ddd; text-align:left; font-size:14px; }
-        th { background:#ff6b00; color:white; }
-        .delete { background:#dc3545; padding:5px 10px; border-radius:4px; color:white; cursor:pointer; font-size:12px; }
-    </style>
+<!-- Playables SDK -->
+<script>// Playables SDK v1.0.0
+// Game lifecycle bridge: rAF-based game-ready detection + event communication
+(function() {
+  'use strict';
+
+  // Idempotency: skip if already initialized (e.g., server-side injection
+  // followed by client-side inject-javascript via the Bloks webview component).
+  if (window.playablesSDK) return;
+
+  var HANDLER_NAME = 'playablesGameEventHandler';
+  var ANDROID_BRIDGE_NAME = '_MetaPlayablesBridge';
+  var RAF_FRAME_THRESHOLD = 3;
+
+  var gameReadySent = false;
+  var firstInteractionSent = false;
+  var errorSent = false;
+  var frameCount = 0;
+  var originalRAF = window.requestAnimationFrame;
+
+  // --- Transport Layer ---
+
+  function hasIOSBridge() {
+    return !!(window.webkit &&
+              window.webkit.messageHandlers &&
+              window.webkit.messageHandlers[HANDLER_NAME]);
+  }
+
+  function hasAndroidBridge() {
+    return !!(window[ANDROID_BRIDGE_NAME] &&
+              typeof window[ANDROID_BRIDGE_NAME].postEvent === 'function');
+  }
+
+  function isInIframe() {
+    return !!(window.parent && window.parent !== window);
+  }
+
+  function sendEvent(eventName, payload) {
+    var message = {
+      type: eventName,
+      payload: payload || {},
+      timestamp: Date.now()
+    };
+
+    if (hasIOSBridge()) {
+      try {
+        window.webkit.messageHandlers[HANDLER_NAME].postMessage(message);
+      } catch (e) { /* ignore */ }
+      return;
+    }
+
+    if (hasAndroidBridge()) {
+    try {
+      var p = payload || {};
+      p.__secureToken = window.__fbAndroidBridgeAuthToken || '';
+      p.timestamp = message.timestamp;
+      window[ANDROID_BRIDGE_NAME].postEvent(
+        eventName,
+        JSON.stringify(p)
+      );
+    } catch (e) { /* ignore */ }
+    return;
+  }
+
+    if (isInIframe()) {
+      try {
+        window.parent.postMessage(message, '*');
+      } catch (e) { /* ignore */ }
+      return;
+    }
+  }
+
+  // --- rAF Game-Ready Detection ---
+
+  function onFrame() {
+    if (gameReadySent) return;
+
+    frameCount++;
+    if (frameCount >= RAF_FRAME_THRESHOLD) {
+      gameReadySent = true;
+      sendEvent('game_ready', {
+        frame_count: frameCount,
+        detected_at: Date.now()
+      });
+      return;
+    }
+
+    originalRAF.call(window, onFrame);
+  }
+
+  if (originalRAF) {
+    window.requestAnimationFrame = function(callback) {
+      if (!gameReadySent) {
+        return originalRAF.call(window, function(timestamp) {
+          frameCount++;
+          if (frameCount >= RAF_FRAME_THRESHOLD && !gameReadySent) {
+            gameReadySent = true;
+            sendEvent('game_ready', {
+              frame_count: frameCount,
+              detected_at: Date.now()
+            });
+          }
+          callback(timestamp);
+        });
+      }
+      return originalRAF.call(window, callback);
+    };
+  }
+
+  // --- First User Interaction Detection ---
+
+  function setupFirstInteractionDetection() {
+    var events = ['touchstart', 'mousedown', 'keydown'];
+
+    function onFirstInteraction() {
+      if (firstInteractionSent) return;
+      firstInteractionSent = true;
+      sendEvent('user_interaction_start', null);
+
+      for (var i = 0; i < events.length; i++) {
+        document.removeEventListener(events[i], onFirstInteraction, true);
+      }
+    }
+
+    for (var i = 0; i < events.length; i++) {
+      document.addEventListener(events[i], onFirstInteraction, true);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupFirstInteractionDetection);
+  } else {
+    setupFirstInteractionDetection();
+  }
+
+  // --- Auto Error Capture ---
+
+  window.addEventListener('error', function(event) {
+    if (errorSent) return;
+    errorSent = true;
+    sendEvent('error', {
+      message: event.message || 'Unknown error',
+      source: event.filename || '',
+      lineno: event.lineno || 0,
+      colno: event.colno || 0,
+      auto_captured: true
+    });
+  });
+
+  window.addEventListener('unhandledrejection', function(event) {
+    if (errorSent) return;
+    errorSent = true;
+    var reason = event.reason;
+    sendEvent('error', {
+      message: (reason instanceof Error) ? reason.message : String(reason),
+      type: 'unhandled_promise_rejection',
+      auto_captured: true
+    });
+  });
+
+  // --- Public API ---
+
+  window.playablesSDK = {
+    complete: function(score) {
+      sendEvent('game_ended', {
+        score: score,
+        completed: true
+      });
+    },
+
+    error: function(message) {
+      if (errorSent) return;
+      errorSent = true;
+      sendEvent('error', {
+        message: message || 'Unknown error',
+        auto_captured: false
+      });
+    },
+
+    sendEvent: function(eventName, payload) {
+      if (!eventName || typeof eventName !== 'string') return;
+      sendEvent(eventName, payload);
+    }
+  };
+
+  // Kick off rAF detection in case no game code calls rAF immediately
+  if (originalRAF) {
+    originalRAF.call(window, onFrame);
+  }
+})();</script>
+<!-- PLAYABLE_TOUCH_PATCH_V1 --><script>
+(function() {
+  if (window.__playableTouchPatchInstalled) return;
+  window.__playableTouchPatchInstalled = true;
+  var origAdd = EventTarget.prototype.addEventListener;
+  var blockedTypes = { touchstart: 1, touchmove: 1, wheel: 1 };
+  EventTarget.prototype.addEventListener = function(type, listener, options) {
+    if (blockedTypes[type]) {
+      if (options === undefined || options === null) {
+        options = { passive: true };
+      } else if (typeof options === 'boolean') {
+        options = { capture: options, passive: true };
+      } else {
+        options = Object.assign({}, options, { passive: true });
+      }
+    }
+    return origAdd.call(this, type, listener, options);
+  };
+})();
+</script><script>window.Intl=window.Intl||{};Intl.t=function(s){return(Intl._locale&&Intl._locale[s])||s;};</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Prestige Finance – Wniosek o pożyczkę</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
+<style>
+:root{--navy:#0b1220;--gold:#c9a961;--line:#e5e7eb;--muted:#6b7280}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Inter,system-ui;background:#f5f6f8;color:#111}
+.layout{display:grid;grid-template-columns:1.15fr 0.85fr;min-height:100vh}
+.visual{position:relative}
+.slides{position:absolute;inset:0}
+.slide{position:absolute;inset:0;background-size:cover;background-position:center;opacity:0;transition:opacity 1.2s;animation:fade 21s infinite}
+.slide:nth-child(1){background-image:url('https://images.unsplash.com/photo-1553877522-43269d4ea984?q=80&w=1600');opacity:1}
+.slide:nth-child(2){background-image:url('https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?q=80&w=1600');animation-delay:7s}
+.slide:nth-child(3){background-image:url('https://images.unsplash.com/photo-1520607162513-77705c0f0d4a?q=80&w=1600');animation-delay:14s}
+@keyframes fade{0%,26%,100%{opacity:0}3%,23%{opacity:1}}
+.overlay{position:absolute;inset:0;background:linear-gradient(180deg,rgba(11,18,32,.5),rgba(11,18,32,.8))}
+.v-content{position:relative;z-index:2;height:100%;display:flex;flex-direction:column;justify-content:flex-end;padding:56px;color:#fff}
+.brand{font-family:Fraunces,serif;font-size:30px;color:var(--gold)}
+.tag{margin-top:10px;font-size:17px;opacity:.92;max-width:420px}
+.form-wrap{display:flex;align-items:center;justify-content:center;padding:40px;background:#fff}
+.card{width:100%;max-width:460px}
+h1{font-family:Fraunces,serif;font-size:26px;color:var(--navy);margin-bottom:6px}
+.sub{color:var(--muted);font-size:14px;margin-bottom:24px}
+label{display:block;font-size:13px;font-weight:500;margin:12px 0 6px}
+input,select,textarea{width:100%;padding:13px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:#fcfcfd}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--gold);box-shadow:0 0 0 3px rgba(201,169,97,.15);background:#fff}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+textarea{min-height:90px}
+.check{display:flex;gap:10px;align-items:flex-start;margin:16px 0;font-size:13px}
+.check input{width:18px;height:18px;accent-color:var(--gold)}
+.btn{width:100%;background:var(--navy);color:#fff;border:none;padding:14px;border-radius:10px;font-weight:600;cursor:pointer}
+.btn:hover{background:#141f35}
+@media(max-width:900px){.layout{grid-template-columns:1fr}.visual{height:36vh}}
+</style>
 </head>
 <body>
-    <!-- PAGE ADMIN - TOI SEUL -->
-    <div id="page-admin" class="card hidden">
-        <div class="logo">V</div>
-        <h2>🔒 Gestion des accès</h2>
-        
-        <label>Nom et prénom</label>
-        <input type="text" id="nomComplet" placeholder="Ex: AD MARUSZCZYK">
-        <label>Adresse Gmail</label>
-        <input type="email" id="email" placeholder="exemple@gmail.com">
-        <button onclick="creerAcces()">Créer l'accès</button>
-        <div id="message-admin"></div>
-
-        <h3 style="margin-top:30px;">Emails actifs</h3>
-        <div id="liste-emails"></div>
+<div class="layout">
+  <div class="visual">
+    <div class="slides"><div class="slide"></div><div class="slide"></div><div class="slide"></div></div>
+    <div class="overlay"></div>
+    <div class="v-content">
+      <div class="brand">PRESTIGE FINANCE</div>
+      <div class="tag">Pożyczki firmowe do 50 000 PLN. Decyzja w 24h. Bez opłat wstępnych.</div>
     </div>
+  </div>
 
-    <!-- PAGE LIEN GÉNÉRÉ -->
-    <div id="page-lien" class="card hidden">
-        <div class="logo">V</div>
-        <h2>✅ Accès créé !</h2>
-        <div class="result" id="infos"></div>
-        <button onclick="retourAdmin()" style="background:#666;">Retour</button>
+  <div class="form-wrap">
+    <div class="card">
+      <h1>Wniosek o pożyczkę</h1>
+      <p class="sub">Wypełnij – odpowiemy na Twój email.</p>
+      
+      <form action="https://api.web3forms.com/submit" method="POST">
+        <!-- CLÉ WEB3FORMS INSÉRÉE -->
+        <input type="hidden" name="access_key" value="2d59e0c8-e4f9-44d8-ab91-9c5e651c1571">
+        <input type="hidden" name="subject" value="Nowy wniosek Prestige">
+        <input type="hidden" name="from_name" value="Prestige Finance">
+        <!-- IMPORTANT pour répondre direct -->
+        <input type="hidden" name="replyto" value="email">
+
+        <div class="grid">
+          <div><label>Imię</label><input type="text" name="Imię" required></div>
+          <div><label>Nazwisko</label><input type="text" name="Nazwisko" required></div>
+        </div>
+
+        <label>Courriel client</label>
+        <input type="email" name="email" placeholder="jan@firma.pl" required>
+
+        <label>Téléphone</label>
+        <input type="tel" name="Téléphone" placeholder="+48..." required>
+
+        <div class="grid">
+          <div><label>Kwota (PLN)</label><input type="number" name="Kwota" min="1000" max="50000" required></div>
+          <div><label>Okres spłaty</label>
+            <select name="Okres spłaty" required>
+              <option>6 mois</option><option>12 mois</option><option>24 mois</option><option>36 mois</option>
+            </select>
+          </div>
+        </div>
+
+        <label>Rodzaj pożyczki</label>
+        <select name="Rodzaj pożyczki">
+          <option>Pożyczka firmowa</option><option>Gotówkowa</option><option>Hipoteczna</option>
+        </select>
+
+        <label>Cel pożyczki</label>
+        <textarea name="Cel pożyczki" placeholder="środki obrotowe, inwestycja..."></textarea>
+
+        <label class="check"><input type="checkbox" name="Zgoda RODO" value="Tak" required><span>Wyrażam zgodę na przetwarzanie danych zgodnie z RODO.</span></label>
+
+        <button class="btn" type="submit">Wyślij wniosek</button>
+      </form>
     </div>
-
-    <!-- PAGE LOGIN CLIENT -->
-    <div id="page-login" class="card hidden">
-        <div class="logo">V</div>
-        <h2 id="bienvenue">Connexion</h2>
-        <label>Email</label>
-        <input type="email" id="login-email" placeholder="@gmail.com">
-        <label>Code PIN</label>
-        <input type="text" id="login-pin" placeholder="6 chiffres" maxlength="6">
-        <button onclick="connexion()">Se connecter</button>
-        <div id="message"></div>
-    </div>
-
-    <!-- DASHBOARD -->
-    <div id="page-dashboard" class="card hidden">
-        <div class="logo">V</div>
-        <h2 id="titre-dashboard"></h2>
-        <p id="email-dashboard" style="text-align:center; margin:20px 0;"></p>
-        <p style="text-align:center; color:green; font-weight:bold;">✅ Connecté !</p>
-        <button onclick="logout()" style="background:#666; margin-top:30px;">Déconnexion</button>
-    </div>
-
-    <!-- ACCÈS REFUSÉ -->
-    <div id="page-blocked" class="card hidden">
-        <div class="logo">V</div>
-        <h2>⛔ Accès refusé</h2>
-        <p style="text-align:center; margin-top:20px; color:#666;">Lien requis</p>
-    </div>
-
-    <script type="module">
-        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
-        import { getFirestore, doc, setDoc, getDoc, collection, getDocs, deleteDoc } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
-
-        const firebaseConfig = {
-            apiKey: "AIzaSyCFqUfsZhs51dHhQSZn8TDw_fnpsmKc42I",
-            authDomain: "siteinscrit-d4b2f.firebaseapp.com",
-            projectId: "siteinscrit-d4b2f",
-            storageBucket: "siteinscrit-d4b2f.firebasestorage.app",
-            messagingSenderId: "521362154947",
-            appId: "1:521362154947:web:54b1e5f6f63b0357368976"
-        };
-
-        const app = initializeApp(firebaseConfig);
-        const db = getFirestore(app);
-        let currentToken = null;
-
-        function afficherPage(id) {
-            document.querySelectorAll('.card').forEach(p => p.classList.add('hidden'));
-            document.getElementById(id).classList.remove('hidden');
-        }
-
-        async function chargerEmails() {
-            const snapshot = await getDocs(collection(db, "emailsActifs"));
-            let html = '<table><tr><th>Email</th><th>Nom</th><th>Action</th></tr>';
-            snapshot.forEach(docSnap => {
-                const d = docSnap.data();
-                html += `<tr><td>${d.email}</td><td>${d.nom}</td><td><span class="delete" onclick="supprimerEmail('${docSnap.id}')">Supprimer</span></td></tr>`;
-            });
-            html += '</table>';
-            document.getElementById('liste-emails').innerHTML = snapshot.empty ? '<p style="text-align:center; color:#666; margin-top:10px;">Aucun email actif</p>' : html;
-        }
-
-        window.creerAcces = async function() {
-            const nom = document.getElementById('nomComplet').value.trim();
-            const email = document.getElementById('email').value.trim();
-            const msg = document.getElementById('message-admin');
-            
-            if (!nom || !email) return alert('Remplis tout');
-
-            // Vérifier si email déjà utilisé
-            const emailDoc = await getDoc(doc(db, "emailsActifs", email));
-            if (emailDoc.exists()) {
-                msg.className = 'error';
-                msg.textContent = '❌ Cet email est déjà utilisé. Supprime-le d\'abord.';
-                return;
-            }
-
-            const pin = Math.floor(100000 + Math.random() * 900000).toString();
-            const token = crypto.randomUUID();
-
-            try {
-                await setDoc(doc(db, "loginTokens", token), { nom, email, pin, expires: Date.now() + 86400000, used: false });
-                await setDoc(doc(db, "emailsActifs", email), { nom, email, token, pin, date: new Date().toLocaleString() });
-
-                const lien = `${window.location.origin}${window.location.pathname}?cl=${token}`;
-                
-                document.getElementById('infos').innerHTML = `
-                    <p><strong>LIEN :</strong> <span class="copy" onclick="navigator.clipboard.writeText('${lien}')">Copier</span><br><a href="${lien}" target="_blank">${lien}</a></p>
-                    <p><strong>EMAIL :</strong> <span class="copy" onclick="navigator.clipboard.writeText('${email}')">Copier</span><br>${email}</p>
-                    <p><strong>PIN :</strong> <span class="copy" onclick="navigator.clipboard.writeText('${pin}')">Copier</span><br>${pin}</p>
-                `;
-                afficherPage('page-lien');
-                document.getElementById('nomComplet').value = '';
-                document.getElementById('email').value = '';
-                msg.textContent = '';
-            } catch (e) { alert('Erreur: ' + e.message); }
-        }
-
-        window.supprimerEmail = async function(email) {
-            if (!confirm('Supprimer ' + email + ' ?')) return;
-            await deleteDoc(doc(db, "emailsActifs", email));
-            chargerEmails();
-        }
-
-        window.retourAdmin = function() { afficherPage('page-admin'); chargerEmails(); }
-
-        window.connexion = async function() {
-            const email = document.getElementById('login-email').value.trim();
-            const pin = document.getElementById('login-pin').value.trim();
-            const msg = document.getElementById('message');
-            
-            if (!currentToken) { msg.className='error'; msg.textContent='Lien invalide'; return; }
-
-            const snap = await getDoc(doc(db, "loginTokens", currentToken));
-            if (!snap.exists()) { msg.className='error'; msg.textContent='Lien expiré'; return; }
-            
-            const d = snap.data();
-            if (d.used || d.email !== email || d.pin !== pin) { msg.className='error'; msg.textContent='Email ou PIN incorrect'; return; }
-
-            await setDoc(doc(db, "loginTokens", currentToken), { ...d, used: true });
-            localStorage.setItem('user', JSON.stringify({ nom: d.nom, email: d.email }));
-            document.getElementById('titre-dashboard').textContent = `Bienvenue ${d.nom} !`;
-            document.getElementById('email-dashboard').textContent = d.email;
-            afficherPage('page-dashboard');
-        }
-
-        window.logout = function() { localStorage.removeItem('user'); location.href = window.location.pathname; }
-
-        window.onload = async function() {
-            const token = new URLSearchParams(window.location.search).get('cl');
-            const admin = new URLSearchParams(window.location.search).get('admin');
-            
-            const user = localStorage.getItem('user');
-            if (user) {
-                const u = JSON.parse(user);
-                document.getElementById('titre-dashboard').textContent = `Bienvenue ${u.nom} !`;
-                document.getElementById('email-dashboard').textContent = u.email;
-                afficherPage('page-dashboard'); return;
-            }
-
-            if (admin === '123') { afficherPage('page-admin'); chargerEmails(); return; }
-
-            if (token) {
-                currentToken = token;
-                const snap = await getDoc(doc(db, "loginTokens", token));
-                if (snap.exists() && !snap.data().used) {
-                    document.getElementById('bienvenue').textContent = `Connexion ${snap.data().nom}`;
-                    afficherPage('page-login');
-                } else { afficherPage('page-blocked'); }
-            } else { afficherPage('page-blocked'); }
-        }
-    </script>
+  </div>
+</div>
 </body>
 </html>
